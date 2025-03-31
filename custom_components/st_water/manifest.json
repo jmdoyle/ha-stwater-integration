@@ -1,0 +1,16 @@
+{
+    "domain": "st_water",
+    "name": "Severn Trent Water",
+    "version": "0.1.0",
+    "codeowners": [
+      "@jmdoyle"
+    ],
+    "config_flow": true,
+    "documentation": "https://github.com/jmdoyle/ha-stw-integration",
+    "dependencies": [],
+    "iot_class": "cloud_polling",
+    "requirements": [
+      "selenium==4.26.1",
+      "selenium-wire==5.1.0"
+    ]
+  }
