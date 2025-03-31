@@ -35,15 +35,20 @@ class STWaterConfigFlow(ConfigFlow, domain=DOMAIN):
                     user_input[CONF_PASSWORD],
                     user_input[CONF_SELENIUM]
                 )
-                if result:
+                if result and len(result) > 0:
                     return self.async_create_entry(
                         title=NAME,
                         data=user_input,
                     )
                 else:
                     errors["base"] = INVALID_AUTH
-            except Exception:
+            except ConnectionError:
                 errors["base"] = CANNOT_CONNECT
+            except Exception as e:
+                if "invalid_auth" in str(e).lower() or "login" in str(e).lower():
+                    errors["base"] = INVALID_AUTH
+                else:
+                    errors["base"] = CANNOT_CONNECT
 
         return self.async_show_form(
             step_id="user",
