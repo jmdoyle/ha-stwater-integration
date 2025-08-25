@@ -7,9 +7,21 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from .const import LOGIN_PAGE, DEBUG_MODE
+from .const import LOGIN_PAGE, DEBUG_MODE, BROWSER_DEBUG
 
 _LOGGER = logging.getLogger(__name__)
+
+# Debug directory for screenshots
+DEBUG_DIR = "/config/debug"
+
+def ensure_debug_dir():
+    """Ensure the debug directory exists"""
+    try:
+        if not os.path.exists(DEBUG_DIR):
+            os.makedirs(DEBUG_DIR, exist_ok=True)
+            _LOGGER.debug("Created debug directory: %s", DEBUG_DIR)
+    except Exception as e:
+        _LOGGER.warning("Failed to create debug directory: %s", e)
 
 
 def extract_hourly_data(consumption_history):
@@ -64,11 +76,13 @@ def parse_date(date_str, year):
 
 def get_water_usage(username=None, password=None, selenium_url=None):
     """Get water usage data and return as dictionary.
-    
+
     Args:
         username (str, optional): Username for login
         password (str, optional): Password for login
         selenium_url (str, optional): URL for Selenium remote webdriver
+
+    Note: Currently returns empty data as placeholder until new usage graphs are available
     """
     if not username or not password or not selenium_url:
         username = os.getenv("WATER_USERNAME")
@@ -76,8 +90,21 @@ def get_water_usage(username=None, password=None, selenium_url=None):
         selenium_url = os.getenv("SELENIUM_URL")
     if not username or not password or not selenium_url:
         raise ValueError("No credentials or selenium URL provided")
+
+    # Debug mode override - return mock data
+    if DEBUG_MODE:
+        _LOGGER.debug("Debug mode: returning mock data")
+        return {
+            "2025-08-24": {
+                "00:00": 0,
+                "01:00": 0,
+                "02:00": 0
+            }
+        }
+
     start_time = time_module.time()
-    _LOGGER.debug("Starting water usage fetch")
+    _LOGGER.debug("Starting water usage fetch for user: %s", username[:3] + "***")
+    _LOGGER.info("Note: New ST Water website detected - usage graphs not yet available, returning placeholder data")
 
     try:
         data = {}
@@ -85,169 +112,136 @@ def get_water_usage(username=None, password=None, selenium_url=None):
         retry_count = 0
 
         while retry_count < max_retries:
+            driver = None
             try:
                 _LOGGER.debug("Attempt %d", retry_count + 1)
                 options = webdriver.ChromeOptions()
-                if not DEBUG_MODE:
+                if not BROWSER_DEBUG:  # Use BROWSER_DEBUG instead of DEBUG_MODE for headless control
                     options.add_argument("--headless")
+
+                # Core stability options
                 options.add_argument("--no-sandbox")
                 options.add_argument("--disable-gpu")
-                options.add_argument("--start-maximized")
                 options.add_argument("--disable-dev-shm-usage")
-                options.add_experimental_option("excludeSwitches", ["enable-logging"])
-                driver = webdriver.Remote(command_executor=selenium_url, options=options)
-                _LOGGER.debug("Getting log-in page")
+                options.add_argument("--disable-web-security")
+                options.add_argument("--disable-features=VizDisplayCompositor")
+                options.add_argument("--disable-extensions")
+                options.add_argument("--disable-plugins")
+                options.add_argument("--disable-images")
+                options.add_argument("--no-first-run")
+                options.add_argument("--disable-default-apps")
+                options.add_argument("--disable-background-timer-throttling")
+                options.add_argument("--disable-renderer-backgrounding")
+                options.add_argument("--disable-backgrounding-occluded-windows")
+
+                # Memory management
+                options.add_argument("--memory-pressure-off")
+                options.add_argument("--max_old_space_size=4096")
+                options.add_argument("--force-device-scale-factor=1")
+
+                # Window management
+                options.add_argument("--window-size=1920,1080")
+                options.add_argument("--start-maximized")
+
+                # Disable logging and automation detection
+                options.add_experimental_option("excludeSwitches", ["enable-logging", "enable-automation"])
+                options.add_experimental_option('useAutomationExtension', False)
+                options.add_argument("--disable-blink-features=AutomationControlled")
+
+                # Set user agent to avoid detection
+                options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36")
+
+                driver = webdriver.Remote(
+                    command_executor=selenium_url,
+                    options=options
+                )
+
+                # Set timeouts for the driver
+                driver.set_page_load_timeout(60)
+                driver.implicitly_wait(10)
+
+                _LOGGER.debug("Getting usage page (new ST Water website)")
                 driver.get(LOGIN_PAGE)
-                _LOGGER.debug("Got log-in page")
+                _LOGGER.debug("Got usage page, current URL: %s", driver.current_url)
 
-                # Wait for cookie popup with better error handling
-                try:
-                    _LOGGER.debug("Waiting for cookie popup")
-                    cookie_popup = WebDriverWait(driver, 10).until(
-                        EC.element_to_be_clickable(
-                            (By.CLASS_NAME, "cookie-request-container")
-                        )
-                    )
-                    _LOGGER.debug("Found cookie popup, clicking")
-                    cookie_popup.click()
-                    _LOGGER.debug(
-                        "Cookie popup handled at %.2f seconds",
-                        time_module.time() - start_time,
-                    )
-                except Exception as e:
-                    _LOGGER.warning("Cookie popup handling failed: %s", str(e))
-                    # Continue anyway as the cookie popup might not appear
+                # Take a screenshot for debugging
+                if BROWSER_DEBUG:
+                    try:
+                        ensure_debug_dir()
+                        driver.save_screenshot(f"{DEBUG_DIR}/debug_usage_page.png")
+                        _LOGGER.debug("Saved screenshot: %s/debug_usage_page.png", DEBUG_DIR)
+                    except Exception as e:
+                        _LOGGER.warning("Failed to save screenshot: %s", e)
 
-                # Wait for login form with explicit element checks
-                _LOGGER.debug("Waiting for login form")
-                username_field = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.ID, "username"))
-                )
-                password_field = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.ID, "password"))
-                )
+                # Wait a moment for the page to load completely
+                time_module.sleep(3)
 
-                # Clear fields first
-                username_field.clear()
-                password_field.clear()
+                # Check if we need to authenticate or if we're already on the usage page
+                current_url = driver.current_url
+                page_title = driver.title.lower()
 
-                # Type credentials with explicit waits
-                _LOGGER.debug("Entering credentials")
-                _LOGGER.debug("username: %s", username)
-                _LOGGER.debug("password: %s", "*" * len(password))
-                time_module.sleep(1)  # Small delay before typing
-                username_field.send_keys(username)
-                time_module.sleep(1)  # Small delay between fields
-                password_field.send_keys(password)
-                time_module.sleep(1)  # Small delay before submit
+                _LOGGER.debug("After navigation - URL: %s, Title: %s", current_url, page_title)
 
-                # Find and click the login button instead of using RETURN key
-                _LOGGER.debug("Clicking login button")
-                login_button = WebDriverWait(driver, 10).until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[@type='submit']"))
-                )
-                login_button.click()
+                # Check if we're redirected to a login page
+                if "login" in current_url.lower() or "sign-in" in current_url.lower() or "auth" in current_url.lower():
+                    _LOGGER.debug("Detected login page, attempting authentication")
+                    success = handle_authentication(driver, username, password, start_time)
+                    if not success:
+                        raise ValueError("Authentication failed")
+                elif "usage" in current_url.lower() or "account" in current_url.lower():
+                    _LOGGER.debug("Already on usage/account page")
+                else:
+                    _LOGGER.warning("Unexpected page after navigation: %s", current_url)
 
-                # Wait for successful login
-                _LOGGER.debug("Waiting for login to complete")
-                tracker_link = WebDriverWait(driver, 20).until(
-                    EC.element_to_be_clickable((By.LINK_TEXT, "MY SMART TRACKER"))
-                )
+                # Take screenshot after authentication/navigation
+                if BROWSER_DEBUG:
+                    try:
+                        ensure_debug_dir()
+                        driver.save_screenshot(f"{DEBUG_DIR}/debug_after_auth.png")
+                        _LOGGER.debug("Saved screenshot: %s/debug_after_auth.png", DEBUG_DIR)
+                    except Exception as e:
+                        _LOGGER.warning("Failed to save screenshot: %s", e)
 
-                _LOGGER.debug("Successfully logged in, clicking tracker link")
-                tracker_link.click()
+                # Verify we're on the usage page
+                final_url = driver.current_url
+                _LOGGER.debug("Final URL: %s", final_url)
 
-                # Switch to Day reporting
-                WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located(
-                        (By.CLASS_NAME, "consumption-history")
-                    )
-                )
-                consumption_history = driver.find_element(
-                    By.CLASS_NAME, "consumption-history"
-                )
-                WebDriverWait(consumption_history, 10).until(
-                    EC.presence_of_element_located((By.CLASS_NAME, "button-reset"))
-                )
-                _LOGGER.debug("Change to Day view")
-                period_buttons = consumption_history.find_elements(
-                    By.CLASS_NAME, "button-reset"
-                )
-                for period_button in period_buttons:
-                    if period_button.text == "Day":
-                        period_button.click()
-                        break
+                if "usage" in final_url.lower() or "account" in final_url.lower():
+                    _LOGGER.info("Successfully reached usage page")
 
-                # Dictionary to store all days' data
-                usage_data = {}
+                    # TODO: Extract usage data when graphs become available
+                    # For now, return placeholder data to indicate successful connection
+                    _LOGGER.info("Usage graphs not yet available on new website - returning placeholder data")
 
-                while True:  # Loop until there's no more data
-                    # Wait for the consumption history to load
-                    WebDriverWait(driver, 10).until(
-                        EC.presence_of_element_located(
-                            (By.CLASS_NAME, "consumption-history")
-                        )
-                    )
-                    _LOGGER.debug("Getting usage data")
-                    consumption_history = driver.find_element(
-                        By.CLASS_NAME, "consumption-history"
-                    )
+                    # Return placeholder data with today's date
+                    today = datetime.now().strftime("%Y-%m-%d")
+                    data = {
+                        today: {
+                            "00:00": 0,  # Placeholder values
+                            "12:00": 0,
+                        }
+                    }
 
-                    # Extract current date
-                    current_date = consumption_history.find_element(
-                        By.CLASS_NAME, "period-dates"
-                    ).text
-
-                    # Extract data for the current day
-                    daily_data = extract_hourly_data(consumption_history)
-                    usage_data.update(daily_data)
-
-                    # Click "Next period range" button to go to the next day
-                    next_button = consumption_history.find_element(
-                        By.XPATH, "//button[@aria-label='Next period range']"
-                    )
-
-                    # Check if the button is disabled
-                    if (
-                        "disabled" in next_button.get_attribute("class")
-                        or not next_button.is_enabled()
-                    ):
-                        _LOGGER.debug("No more data available. Exiting loop.")
-                        break
-
-                    # Click "Next period range" button
-                    next_button.click()
-                    _LOGGER.debug("Next day")
-                    WebDriverWait(driver, 10).until(
-                        lambda d: d.find_element(By.CLASS_NAME, "period-dates").text
-                        != current_date
-                    )
-
-                for day, hours in usage_data.items():
-                    # The date data from ST Water does not have a year. The day data is roughly from the last 8 days so it only matters near the start of a new year.
-                    # If the month is January and the day is December, we need to subtract 1 from the year.
-                    # This is a bit of a hack but it probably works for the current setup.
-                    year = datetime.now().year
-                    month = datetime.now().month
-                    if month == 1 and "December" in day:
-                        year -= 1
-                    _LOGGER.debug("Usage for %s: %s", day, hours)
-                    iso_date = parse_date(day, year)
-                    time_data = {}
-                    for usage in hours:
-                        time, value = parse_usage(usage)
-                        if time:
-                            time_data[time] = value
-                    data[iso_date] = time_data
-
-                return data
+                    return data
+                else:
+                    raise ValueError("Failed to reach usage page")
 
             except Exception as e:
-                raise
+                elapsed = time_module.time() - start_time
+                _LOGGER.warning(
+                    "Attempt %d failed after %.2f seconds: %s",
+                    retry_count + 1,
+                    elapsed,
+                    str(e),
+                )
+                retry_count += 1
+                if retry_count >= max_retries:
+                    raise
+                time_module.sleep(5 * retry_count)
 
             finally:
                 elapsed = time_module.time() - start_time
-                _LOGGER.debug("Execution completed in %.2f seconds", elapsed)
+                _LOGGER.debug("Attempt completed in %.2f seconds", elapsed)
                 if driver is not None:
                     try:
                         driver.quit()
@@ -257,13 +251,111 @@ def get_water_usage(username=None, password=None, selenium_url=None):
                         driver = None
 
     except Exception as e:
-        retry_count += 1
-        _LOGGER.warning(
-            "Attempt %d failed after %.2f seconds: %s",
-            retry_count,
-            time_module.time() - start_time,
-            str(e),
-        )
-        if retry_count >= max_retries:
-            raise
-        time_module.sleep(5 * retry_count)
+        _LOGGER.error("All attempts failed: %s", str(e))
+        raise
+
+
+def handle_authentication(driver, username, password, start_time):
+    """Handle authentication on the new ST Water website"""
+    try:
+        # Look for various possible login form elements
+        _LOGGER.debug("Looking for login form elements")
+
+        # Wait for login form - try different possible selectors
+        username_field = None
+        password_field = None
+
+        # Try common username field selectors
+        for selector in ["#username", "#email", "[name='username']", "[name='email']", "[type='email']", "input[placeholder*='email' i]", "input[placeholder*='username' i]"]:
+            try:
+                username_field = WebDriverWait(driver, 5).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                )
+                _LOGGER.debug("Found username field with selector: %s", selector)
+                break
+            except:
+                continue
+
+        # Try common password field selectors
+        for selector in ["#password", "[name='password']", "[type='password']", "input[placeholder*='password' i]"]:
+            try:
+                password_field = WebDriverWait(driver, 5).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                )
+                _LOGGER.debug("Found password field with selector: %s", selector)
+                break
+            except:
+                continue
+
+        if not username_field or not password_field:
+            _LOGGER.error("Could not find login form fields")
+            return False
+
+        _LOGGER.debug("Found login form fields")
+
+        # Clear fields first
+        username_field.clear()
+        password_field.clear()
+
+        # Type credentials with explicit waits
+        _LOGGER.debug("Entering credentials")
+        _LOGGER.debug("username: %s", username[:3] + "*" * (len(username) - 3))
+        _LOGGER.debug("password: %s", "*" * len(password))
+
+        time_module.sleep(1)
+        username_field.send_keys(username)
+        time_module.sleep(1)
+        password_field.send_keys(password)
+        time_module.sleep(1)
+
+        # Take screenshot before clicking login
+        if BROWSER_DEBUG:
+            try:
+                ensure_debug_dir()
+                driver.save_screenshot(f"{DEBUG_DIR}/debug_before_login.png")
+                _LOGGER.debug("Saved screenshot: %s/debug_before_login.png", DEBUG_DIR)
+            except Exception as e:
+                _LOGGER.warning("Failed to save screenshot: %s", e)
+
+        # Find and click the login button
+        _LOGGER.debug("Looking for login button")
+        login_button = None
+
+        # Try common login button selectors
+        for selector in ["button[type='submit']", "input[type='submit']", "button:contains('Sign in')", "button:contains('Login')", "button:contains('Log in')", ".login-btn", ".signin-btn"]:
+            try:
+                login_button = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                )
+                _LOGGER.debug("Found login button with selector: %s", selector)
+                break
+            except:
+                continue
+
+        if not login_button:
+            _LOGGER.error("Could not find login button")
+            return False
+
+        _LOGGER.debug("Found login button: %s", login_button.text if hasattr(login_button, 'text') else 'N/A')
+        login_button.click()
+        _LOGGER.debug("Clicked login button")
+
+        # Wait for authentication to complete
+        _LOGGER.debug("Waiting for authentication to complete")
+        time_module.sleep(5)
+
+        # Check if authentication was successful
+        current_url = driver.current_url
+        _LOGGER.debug("After login attempt - URL: %s", current_url)
+
+        # If we're no longer on a login page, assume success
+        if not any(term in current_url.lower() for term in ["login", "sign-in", "auth"]):
+            _LOGGER.debug("Authentication appears successful")
+            return True
+        else:
+            _LOGGER.error("Authentication failed - still on login page")
+            return False
+
+    except Exception as e:
+        _LOGGER.error("Authentication process failed: %s", str(e))
+        return False
