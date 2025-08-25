@@ -11,6 +11,18 @@ from .const import LOGIN_PAGE, DEBUG_MODE, BROWSER_DEBUG
 
 _LOGGER = logging.getLogger(__name__)
 
+# Debug directory for screenshots
+DEBUG_DIR = "/config/debug"
+
+def ensure_debug_dir():
+    """Ensure the debug directory exists"""
+    try:
+        if not os.path.exists(DEBUG_DIR):
+            os.makedirs(DEBUG_DIR, exist_ok=True)
+            _LOGGER.debug("Created debug directory: %s", DEBUG_DIR)
+    except Exception as e:
+        _LOGGER.warning("Failed to create debug directory: %s", e)
+
 
 def extract_hourly_data(consumption_history):
     """
@@ -104,7 +116,7 @@ def get_water_usage(username=None, password=None, selenium_url=None):
             try:
                 _LOGGER.debug("Attempt %d", retry_count + 1)
                 options = webdriver.ChromeOptions()
-                if not BROWSER_DEBUG:
+                if not BROWSER_DEBUG:  # Use BROWSER_DEBUG instead of DEBUG_MODE for headless control
                     options.add_argument("--headless")
 
                 # Core stability options
@@ -155,8 +167,9 @@ def get_water_usage(username=None, password=None, selenium_url=None):
                 # Take a screenshot for debugging
                 if BROWSER_DEBUG:
                     try:
-                        driver.save_screenshot("/config/debug_usage_page.png")
-                        _LOGGER.debug("Saved screenshot: debug_usage_page.png")
+                        ensure_debug_dir()
+                        driver.save_screenshot(f"{DEBUG_DIR}/debug_usage_page.png")
+                        _LOGGER.debug("Saved screenshot: %s/debug_usage_page.png", DEBUG_DIR)
                     except Exception as e:
                         _LOGGER.warning("Failed to save screenshot: %s", e)
 
@@ -183,8 +196,9 @@ def get_water_usage(username=None, password=None, selenium_url=None):
                 # Take screenshot after authentication/navigation
                 if BROWSER_DEBUG:
                     try:
-                        driver.save_screenshot("/config/debug_after_auth.png")
-                        _LOGGER.debug("Saved screenshot: debug_after_auth.png")
+                        ensure_debug_dir()
+                        driver.save_screenshot(f"{DEBUG_DIR}/debug_after_auth.png")
+                        _LOGGER.debug("Saved screenshot: %s/debug_after_auth.png", DEBUG_DIR)
                     except Exception as e:
                         _LOGGER.warning("Failed to save screenshot: %s", e)
 
@@ -297,8 +311,9 @@ def handle_authentication(driver, username, password, start_time):
         # Take screenshot before clicking login
         if BROWSER_DEBUG:
             try:
-                driver.save_screenshot("/config/debug_before_login.png")
-                _LOGGER.debug("Saved screenshot: debug_before_login.png")
+                ensure_debug_dir()
+                driver.save_screenshot(f"{DEBUG_DIR}/debug_before_login.png")
+                _LOGGER.debug("Saved screenshot: %s/debug_before_login.png", DEBUG_DIR)
             except Exception as e:
                 _LOGGER.warning("Failed to save screenshot: %s", e)
 
